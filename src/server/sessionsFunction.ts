@@ -1,5 +1,5 @@
 import { get, put } from '@vercel/blob'
-import { CLOUD_BLOB_PATH, handleSessionsRequest, type BlobStore } from '../src/cloud/sessionsApi'
+import { CLOUD_BLOB_PATH, handleSessionsRequest, type BlobStore } from '../cloud/sessionsApi'
 
 interface NodeRequest extends AsyncIterable<Uint8Array | string> {
   method?: string
