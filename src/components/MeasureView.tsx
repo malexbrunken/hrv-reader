@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { currentBrowserKind } from '../browserSupport'
 import { connectHeartRateMonitor, isWebBluetoothSupported, type StrapConnection } from '../bluetooth/monitor'
 import { fmt, fmtPct, formatCountdown } from '../format'
 import { filterRrIntervals } from '../hrv/filter'
@@ -28,6 +29,7 @@ type LinkState =
 
 export function MeasureView({ onSave }: { onSave: (session: Session) => void }) {
   const bluetoothSupported = isWebBluetoothSupported()
+  const browserKind = currentBrowserKind(bluetoothSupported)
   const [link, setLink] = useState<LinkState>({ kind: 'idle' })
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -266,28 +268,6 @@ export function MeasureView({ onSave }: { onSave: (session: Session) => void }) 
 
   return (
     <div className="stack">
-      {bluetoothSupported ? (
-        <aside className="banner">
-          <p>
-            Disconnect the strap from Garmin Connect and from your watch before connecting. The HRM 600
-            keeps a single Bluetooth link.
-          </p>
-        </aside>
-      ) : (
-        <aside className="banner warn" role="status">
-          <p className="kicker">Browser support</p>
-          <h2>Web Bluetooth isn’t available here</h2>
-          <p>
-            Safari and Firefox can’t connect to a chest strap. Use Chrome or Edge on a computer.
-          </p>
-          <p>
-            Disconnect the strap from Garmin Connect and from your watch before connecting. The HRM 600
-            keeps a single Bluetooth link, and a watch will hold it.
-          </p>
-          <p>Demo mode still runs a full session with synthetic beats.</p>
-        </aside>
-      )}
-
       <section className="card" aria-labelledby="strap-heading">
         <div className="card-head">
           <h2 id="strap-heading">Strap</h2>
@@ -347,7 +327,11 @@ export function MeasureView({ onSave }: { onSave: (session: Session) => void }) 
         <p className="hint">
           {link.kind === 'demo'
             ? 'Synthetic RR with respiratory sinus arrhythmia and a few ectopic beats. No strap required.'
-            : 'Chrome or Edge opens a device picker. Choose the HRM 600. Wear it snug, wet the electrodes, and tap the module if it is asleep.'}
+            : browserKind === 'ios-other'
+              ? 'Open this page in Bluefy to connect the HRM 600. Wear it snug, wet the electrodes, and tap the module if it is asleep.'
+              : browserKind === 'bluefy'
+                ? 'Bluefy opens a device picker. Choose the HRM 600. Wear it snug, wet the electrodes, and tap the module if it is asleep.'
+                : 'Chrome or Edge opens a device picker. Choose the HRM 600. Wear it snug, wet the electrodes, and tap the module if it is asleep.'}
         </p>
         {error ? (
           <p className="warn-inline" role="alert">

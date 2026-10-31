@@ -6,6 +6,7 @@ import {
   loadSessions,
   mergeFolderDocument,
   mergeSessions,
+  mergeSyncSnapshots,
   parseCsv,
   readSessionText,
   saveSessions,
@@ -129,15 +130,35 @@ describe('session storage', () => {
       sessionsToJson([sharedFile, fileOnly, duplicateInFile]),
     )
 
-    expect(merged.map((item) => item.id)).toEqual(['file', 'local', 'shared'])
-    expect(merged.find((item) => item.id === 'shared')).toMatchObject({
+    expect(merged.sessions.map((item) => item.id)).toEqual(['file', 'local', 'shared'])
+    expect(merged.sessions.find((item) => item.id === 'shared')).toMatchObject({
       rawRr: [700, 710, 720],
       tags: { notes: 'edited here', sleep: 5 },
     })
-    expect(merged.find((item) => item.id === 'file')?.rawRr).toEqual([111])
-    expect(merged.find((item) => item.id === 'local')?.rawRr).toEqual([800, 810])
-    expect(mergeFolderDocument([localOnly], '   ')).toEqual([localOnly])
+    expect(merged.sessions.find((item) => item.id === 'file')?.rawRr).toEqual([111])
+    expect(merged.sessions.find((item) => item.id === 'local')?.rawRr).toEqual([800, 810])
+    expect(merged.tombstones).toEqual([])
+    expect(mergeFolderDocument([localOnly], '   ')).toEqual({ sessions: [localOnly], tombstones: [] })
     expect(() => mergeFolderDocument([], '{')).toThrow(/JSON/)
+  })
+
+  it('lets a tombstone from either side delete a session and keeps the other copy', () => {
+    const kept = session({ id: 'kept', startedAt: '2026-10-03T00:00:00.000Z', rawRr: [800] })
+    const doomed = session({ id: 'doomed', startedAt: '2026-10-02T00:00:00.000Z', rawRr: [900, 910] })
+    const remoteOnly = session({ id: 'remote', startedAt: '2026-10-04T00:00:00.000Z', rawRr: [1000, 1010] })
+    const merged = mergeSyncSnapshots(
+      {
+        sessions: [kept, doomed],
+        tombstones: [{ id: 'remote', deletedAt: '2026-10-05T00:00:00.000Z' }],
+      },
+      {
+        sessions: [remoteOnly, { ...doomed, rawRr: [1], tags: { ...doomed.tags, notes: 'stale' } }],
+        tombstones: [{ id: 'doomed', deletedAt: '2026-10-04T00:00:00.000Z' }],
+      },
+    )
+    expect(merged.sessions.map((item) => item.id)).toEqual(['kept'])
+    expect(merged.sessions[0]?.rawRr).toEqual([800])
+    expect(merged.tombstones.map((item) => item.id).sort()).toEqual(['doomed', 'remote'])
   })
 
   it('merges imports by id and skips duplicates', () => {

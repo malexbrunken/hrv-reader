@@ -1,16 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
+import { BrowserBanner } from './components/BrowserBanner'
+import { CloudSyncCard } from './components/CloudSyncCard'
 import { FolderSyncCard } from './components/FolderSyncCard'
 import { HistoryView } from './components/HistoryView'
 import { MeasureView } from './components/MeasureView'
 import type { Session } from './model'
-import { loadSessions, mergeSessions, saveSessions, sortSessions } from './storage/sessions'
+import {
+  applyTombstones,
+  loadSessions,
+  loadTombstones,
+  mergeSessions,
+  mergeSyncSnapshots,
+  mergeTombstones,
+  saveSessions,
+  saveTombstones,
+  sortSessions,
+  type SyncSnapshot,
+} from './storage/sessions'
+import { registerReconcile, scheduleReconcile } from './syncSchedule'
+import { useCloudSync } from './useCloudSync'
 import { useFolderSync } from './useFolderSync'
 
 type View = 'measure' | 'history'
 
 export default function App() {
   const [view, setView] = useState<View>(() => (window.location.hash === '#history' ? 'history' : 'measure'))
-  const [sessions, setSessions] = useState<Session[]>(() => loadSessions())
+  const [sessions, setSessions] = useState<Session[]>(() => applyTombstones(loadSessions(), loadTombstones()))
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
 
@@ -20,14 +35,70 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  const sync = useFolderSync(sessionsRef, setSessions)
+  const folder = useFolderSync()
+  const cloud = useCloudSync()
+  const folderRef = useRef(folder)
+  const cloudRef = useRef(cloud)
+  folderRef.current = folder
+  cloudRef.current = cloud
 
-  function persist(next: Session[]) {
-    const sorted = sortSessions(next)
+  function commit(snapshot: SyncSnapshot) {
+    const sorted = sortSessions(snapshot.sessions)
     sessionsRef.current = sorted
     saveSessions(sorted)
+    saveTombstones(snapshot.tombstones)
     setSessions(sorted)
-    sync.writeThrough()
+  }
+
+  function localSnapshot(): SyncSnapshot {
+    return { sessions: sessionsRef.current, tombstones: loadTombstones() }
+  }
+
+  registerReconcile(async () => {
+    const cloudApi = cloudRef.current
+    const folderApi = folderRef.current
+    const cloudOn = cloudApi.isActive()
+    const folderOn = folderApi.isActive()
+    if (!cloudOn && !folderOn) return
+    let cloudPulled = false
+    if (cloudOn) {
+      cloudApi.markSyncing()
+      try {
+        commit(mergeSyncSnapshots(localSnapshot(), await cloudApi.pull()))
+        cloudPulled = true
+      } catch (err) {
+        cloudApi.markError(err instanceof Error ? err.message : 'Could not read cloud sync.')
+      }
+    }
+    if (folderOn) {
+      folderApi.markSyncing()
+      try {
+        commit(mergeSyncSnapshots(localSnapshot(), await folderApi.readSnapshot()))
+        await folderApi.writeSnapshot(localSnapshot())
+        folderApi.markReady()
+      } catch (err) {
+        folderApi.markError(folderApi.describeError(err))
+      }
+    }
+    if (cloudPulled) {
+      try {
+        await cloudApi.push(localSnapshot())
+        cloudApi.markReady()
+      } catch (err) {
+        cloudApi.markError(err instanceof Error ? err.message : 'Could not write cloud sync.')
+      }
+    }
+  })
+
+  function persist(next: Session[]) {
+    const tombstones = loadTombstones()
+    commit({ sessions: applyTombstones(next, tombstones), tombstones })
+    scheduleReconcile()
+  }
+
+  function deleteSession(id: string) {
+    saveTombstones(mergeTombstones(loadTombstones(), [{ id, deletedAt: new Date().toISOString() }]))
+    persist(sessionsRef.current.filter((session) => session.id !== id))
   }
 
   function saveOne(session: Session) {
@@ -59,20 +130,26 @@ export default function App() {
         </div>
       </header>
       <main id="content" className="wrap">
+        <BrowserBanner />
+        <CloudSyncCard
+          status={cloud.status}
+          onPassphrase={cloud.setPassphrase}
+          onEnabled={cloud.setEnabled}
+        />
         <FolderSyncCard
-          status={sync.status}
-          onChoose={() => void sync.chooseFolder()}
-          onReconnect={() => void sync.reconnect()}
-          onStop={() => void sync.stopSyncing()}
+          status={folder.status}
+          onChoose={() => void folder.chooseFolder()}
+          onReconnect={() => void folder.reconnect()}
+          onStop={() => void folder.stopSyncing()}
         />
         <div hidden={view !== 'measure'}>
           <MeasureView onSave={saveOne} />
         </div>
         <div hidden={view !== 'history'}>
-          <HistoryView sessions={sessions} onChange={persist} />
+          <HistoryView sessions={sessions} onChange={persist} onDelete={deleteSession} />
         </div>
         <footer>
-          <p>Sessions stay on this device. A sync folder is a file you choose, not an upload.</p>
+          <p>Cloud sync shares history with your phone. A folder is an optional file backup, not an upload by itself.</p>
         </footer>
       </main>
     </>

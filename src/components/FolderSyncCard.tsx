@@ -28,9 +28,9 @@ export function FolderSyncCard({
         </p>
       ) : (
         <p className="hint">
-          Choose a Dropbox, OneDrive, or iCloud folder. The app keeps <span className="file-name">hrv-data.json</span>{' '}
-          there, including raw RR, and still caches sessions in this browser. After a restart, Chrome asks you to
-          reconnect before it will read the folder again.
+          Optional backup. Choose a Dropbox, OneDrive, or iCloud folder. The app keeps{' '}
+          <span className="file-name">hrv-data.json</span> there, including raw RR and deletions. After a restart,
+          Chrome asks you to reconnect before it will read the folder again.
         </p>
       )}
       {status.phase === 'checking' ? <p className="hint">Looking for a saved folder…</p> : null}
