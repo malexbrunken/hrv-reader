@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { Session } from './model'
+import { useEffect, useRef, useState } from 'react'
 import {
   clearDirectoryHandle,
   isFolderSyncSupported,
@@ -8,15 +7,16 @@ import {
   loadSyncMeta,
   permissionMode,
   pickSyncDirectory,
-  readFolderSessions,
+  readFolderSnapshot,
   saveSyncMeta,
   storeDirectoryHandle,
   syncErrorMessage,
-  writeFolderSessions,
+  writeFolderSnapshot,
   type DirectoryHandle,
   type SyncMeta,
 } from './storage/folderSync'
-import { saveSessions, unionSessionsById } from './storage/sessions'
+import type { SyncSnapshot } from './storage/sessions'
+import { scheduleReconcile } from './syncSchedule'
 
 export type SyncPhase = 'unsupported' | 'checking' | 'idle' | 'needs-reconnect' | 'syncing' | 'ready' | 'error'
 
@@ -36,13 +36,10 @@ function statusFrom(phase: SyncPhase, meta: SyncMeta): SyncStatus {
   }
 }
 
-export function useFolderSync(
-  sessionsRef: MutableRefObject<Session[]>,
-  setSessions: Dispatch<SetStateAction<Session[]>>,
-) {
+export function useFolderSync() {
   const mountedRef = useRef(true)
   const directoryRef = useRef<DirectoryHandle | null>(null)
-  const queueRef = useRef<Promise<void>>(Promise.resolve())
+  const grantedRef = useRef(false)
   const metaRef = useRef<SyncMeta>(loadSyncMeta())
   const [status, setStatus] = useState<SyncStatus>(() =>
     statusFrom(isFolderSyncSupported() ? 'checking' : 'unsupported', metaRef.current),
@@ -64,35 +61,43 @@ export function useFolderSync(
     setStatus(statusFrom(phase, meta))
   }
 
-  function enqueue(task: () => Promise<void>): Promise<void> {
-    const run = queueRef.current.then(task, task)
-    queueRef.current = run.then(
-      () => undefined,
-      () => undefined,
-    )
-    return run
+  function isActive() {
+    return directoryRef.current != null && grantedRef.current
   }
 
-  async function pullAndWrite(directory: DirectoryHandle): Promise<void> {
-    const fromFile = await readFolderSessions(directory)
-    const merged = unionSessionsById(sessionsRef.current, fromFile)
-    sessionsRef.current = merged
-    saveSessions(merged)
-    if (mountedRef.current) setSessions(merged)
-    await writeFolderSessions(directory, sessionsRef.current)
+  async function readSnapshot(): Promise<SyncSnapshot> {
+    const directory = directoryRef.current
+    if (!directory) return { sessions: [], tombstones: [] }
+    return readFolderSnapshot(directory)
+  }
+
+  async function writeSnapshot(snapshot: SyncSnapshot): Promise<void> {
+    const directory = directoryRef.current
+    if (!directory) return
+    await writeFolderSnapshot(directory, snapshot)
+  }
+
+  function markSyncing() {
+    const directory = directoryRef.current
+    if (!directory) return
+    remember('syncing', { folderName: directory.name, lastError: null })
+  }
+
+  function markReady() {
+    const directory = directoryRef.current
+    if (!directory) return
     remember('ready', { folderName: directory.name, lastSyncedAt: new Date().toISOString(), lastError: null })
   }
 
-  function queueSync(directory: DirectoryHandle): Promise<void> {
+  function markError(message: string) {
+    remember('error', { folderName: directoryRef.current?.name ?? null, lastError: message })
+  }
+
+  function arm(directory: DirectoryHandle) {
     directoryRef.current = directory
+    grantedRef.current = true
     remember('syncing', { folderName: directory.name, lastError: null })
-    return enqueue(async () => {
-      try {
-        await pullAndWrite(directory)
-      } catch (err) {
-        remember('error', { folderName: directory.name, lastError: syncErrorMessage(err) })
-      }
-    })
+    scheduleReconcile()
   }
 
   useEffect(() => {
@@ -112,10 +117,11 @@ export function useFolderSync(
         if (cancelled || !mountedRef.current) return
         if (permission !== 'granted') {
           directoryRef.current = handle
+          grantedRef.current = false
           remember('needs-reconnect', { folderName: handle.name, lastError: null })
           return
         }
-        await queueSync(handle)
+        arm(handle)
       } catch (err) {
         if (cancelled || !mountedRef.current) return
         remember('error', { lastError: syncErrorMessage(err) })
@@ -132,7 +138,7 @@ export function useFolderSync(
     try {
       const handle = await pickSyncDirectory()
       await storeDirectoryHandle(handle)
-      await queueSync(handle)
+      arm(handle)
     } catch (err) {
       if (isPickerDismissal(err)) return
       remember('error', { lastError: syncErrorMessage(err) })
@@ -149,6 +155,7 @@ export function useFolderSync(
       const permission = await handle.requestPermission(permissionMode())
       if (permission !== 'granted') {
         directoryRef.current = handle
+        grantedRef.current = false
         remember('needs-reconnect', {
           folderName: handle.name,
           lastError: 'Folder permission was not granted. Click Reconnect folder to try again.',
@@ -156,7 +163,7 @@ export function useFolderSync(
         return
       }
       await storeDirectoryHandle(handle)
-      await queueSync(handle)
+      arm(handle)
     } catch (err) {
       if (isPickerDismissal(err)) return
       remember('error', { lastError: syncErrorMessage(err) })
@@ -165,6 +172,7 @@ export function useFolderSync(
 
   async function stopSyncing() {
     directoryRef.current = null
+    grantedRef.current = false
     try {
       await clearDirectoryHandle()
     } catch (err) {
@@ -174,21 +182,17 @@ export function useFolderSync(
     remember('idle', { folderName: null, lastError: null })
   }
 
-  function writeThrough() {
-    const directory = directoryRef.current
-    if (!directory || status.phase === 'needs-reconnect' || status.phase === 'unsupported') return
-    remember('syncing', { folderName: directory.name, lastError: null })
-    void enqueue(async () => {
-      const current = directoryRef.current
-      if (!current) return
-      try {
-        await writeFolderSessions(current, sessionsRef.current)
-        remember('ready', { folderName: current.name, lastSyncedAt: new Date().toISOString(), lastError: null })
-      } catch (err) {
-        remember('error', { folderName: current.name, lastError: syncErrorMessage(err) })
-      }
-    })
+  return {
+    status,
+    chooseFolder,
+    reconnect,
+    stopSyncing,
+    isActive,
+    readSnapshot,
+    writeSnapshot,
+    markSyncing,
+    markReady,
+    markError,
+    describeError: syncErrorMessage,
   }
-
-  return { status, chooseFolder, reconnect, stopSyncing, writeThrough }
 }

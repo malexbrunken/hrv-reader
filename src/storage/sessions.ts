@@ -182,11 +182,84 @@ export function unionSessionsById(local: Session[], file: Session[]): Session[] 
   return sortSessions([...byId.values()])
 }
 
-/** Parse a folder document and union it with the local cache. An empty file is an empty list. */
-export function mergeFolderDocument(local: Session[], fileText: string): Session[] {
+export interface Tombstone {
+  id: string
+  deletedAt: string
+}
+
+export interface SyncSnapshot {
+  sessions: Session[]
+  tombstones: Tombstone[]
+}
+
+export const TOMBSTONE_KEY = 'hrv-reader.tombstones.v1'
+
+export function emptySnapshot(): SyncSnapshot {
+  return { sessions: [], tombstones: [] }
+}
+
+/** Later deletion time wins when both sides recorded the same id. */
+export function mergeTombstones(local: Tombstone[], remote: Tombstone[]): Tombstone[] {
+  const byId = new Map<string, Tombstone>()
+  for (const tombstone of [...remote, ...local]) {
+    if (!tombstone.id || !Number.isFinite(Date.parse(tombstone.deletedAt))) continue
+    const previous = byId.get(tombstone.id)
+    if (!previous || Date.parse(tombstone.deletedAt) >= Date.parse(previous.deletedAt)) {
+      byId.set(tombstone.id, { id: tombstone.id, deletedAt: tombstone.deletedAt })
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+
+export function applyTombstones(sessions: Session[], tombstones: Tombstone[]): Session[] {
+  if (tombstones.length === 0) return sessions
+  const dead = new Set(tombstones.map((tombstone) => tombstone.id))
+  return sessions.filter((session) => !dead.has(session.id))
+}
+
+/**
+ * Same union as folder sync, then tombstones from either side remove that id.
+ * A deletion therefore propagates even when the other copy still has the session.
+ * When both copies still have the session, the local one is kept.
+ */
+export function mergeSyncSnapshots(local: SyncSnapshot, remote: SyncSnapshot): SyncSnapshot {
+  const tombstones = mergeTombstones(local.tombstones, remote.tombstones)
+  return {
+    sessions: applyTombstones(unionSessionsById(local.sessions, remote.sessions), tombstones),
+    tombstones,
+  }
+}
+
+/** Parse a folder or cloud document and union it with the local cache. */
+export function mergeFolderDocument(
+  local: Session[],
+  fileText: string,
+  localTombstones: Tombstone[] = [],
+): SyncSnapshot {
   const trimmed = fileText.replace(/^\uFEFF/, '').trim()
-  const fromFile = trimmed ? parseJsonSessions(trimmed) : []
-  return unionSessionsById(local, fromFile)
+  const remote = trimmed ? parseSnapshot(trimmed) : emptySnapshot()
+  return mergeSyncSnapshots({ sessions: local, tombstones: localTombstones }, remote)
+}
+
+export function loadTombstones(storage?: StorageLike): Tombstone[] {
+  try {
+    const store = storage ?? browserStorage()
+    const raw = store.getItem(TOMBSTONE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return mergeTombstones(
+      parsed.map(sanitizeTombstone).filter((tombstone): tombstone is Tombstone => tombstone != null),
+      [],
+    )
+  } catch {
+    return []
+  }
+}
+
+export function saveTombstones(tombstones: Tombstone[], storage?: StorageLike): void {
+  const store = storage ?? browserStorage()
+  store.setItem(TOMBSTONE_KEY, JSON.stringify(mergeTombstones(tombstones, [])))
 }
 
 export function mergeSessions(existing: Session[], incoming: Session[]): MergeResult {
@@ -294,8 +367,48 @@ export function sessionsToCsv(sessions: Session[]): string {
   return `\uFEFF${lines.join('\n')}\n`
 }
 
-export function sessionsToJson(sessions: Session[]): string {
-  return `${JSON.stringify({ app: 'hrv-reader', version: 1, sessions }, null, 2)}\n`
+export function snapshotToJson(snapshot: SyncSnapshot): string {
+  return `${JSON.stringify(
+    {
+      app: 'hrv-reader',
+      version: 1,
+      sessions: snapshot.sessions,
+      tombstones: snapshot.tombstones,
+    },
+    null,
+    2,
+  )}\n`
+}
+
+export function sessionsToJson(sessions: Session[], tombstones: Tombstone[] = []): string {
+  return snapshotToJson({ sessions, tombstones })
+}
+
+export function parseSnapshot(text: string): SyncSnapshot {
+  const sessions = parseJsonSessions(text)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { sessions, tombstones: [] }
+  }
+  const tombstoneList =
+    parsed != null && typeof parsed === 'object' && Array.isArray((parsed as { tombstones?: unknown }).tombstones)
+      ? (parsed as { tombstones: unknown[] }).tombstones
+      : []
+  const tombstones = tombstoneList
+    .map(sanitizeTombstone)
+    .filter((tombstone): tombstone is Tombstone => tombstone != null)
+  return { sessions: applyTombstones(sessions, tombstones), tombstones: mergeTombstones(tombstones, []) }
+}
+
+function sanitizeTombstone(value: unknown): Tombstone | null {
+  if (value == null || typeof value !== 'object') return null
+  const row = value as Record<string, unknown>
+  const id = typeof row.id === 'string' ? row.id.trim() : ''
+  const deletedAt = typeof row.deletedAt === 'string' ? row.deletedAt : ''
+  if (!id || !Number.isFinite(Date.parse(deletedAt))) return null
+  return { id, deletedAt }
 }
 
 export function parseCsv(text: string): string[][] {

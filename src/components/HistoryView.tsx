@@ -15,9 +15,11 @@ import { TrendChart } from './TrendChart'
 export function HistoryView({
   sessions,
   onChange,
+  onDelete,
 }: {
   sessions: Session[]
   onChange: (sessions: Session[]) => void
+  onDelete: (id: string) => void
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -57,11 +59,11 @@ export function HistoryView({
     const when = formatWhen(session.startedAt)
     if (
       !window.confirm(
-        `Delete the session from ${when}? It is removed from this browser, and from hrv-data.json when a folder is syncing.`,
+        `Delete the session from ${when}? The deletion is kept, so cloud sync and a connected folder drop it on the other device too.`,
       )
     )
       return
-    onChange(sessions.filter((item) => item.id !== session.id))
+    onDelete(session.id)
   }
 
   return (

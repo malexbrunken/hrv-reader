@@ -1,5 +1,4 @@
-import { parseJsonSessions, sessionsToJson, type StorageLike } from './sessions'
-import type { Session } from '../model'
+import { emptySnapshot, parseSnapshot, snapshotToJson, type StorageLike, type SyncSnapshot } from './sessions'
 
 export const SYNC_FILE_NAME = 'hrv-data.json'
 const HANDLE_DB = 'hrv-reader'
@@ -100,24 +99,24 @@ export async function clearDirectoryHandle(): Promise<void> {
   }
 }
 
-export async function readFolderSessions(directory: DirectoryHandle): Promise<Session[]> {
+export async function readFolderSnapshot(directory: DirectoryHandle): Promise<SyncSnapshot> {
   try {
     const fileHandle = await directory.getFileHandle(SYNC_FILE_NAME)
     const file = await fileHandle.getFile()
     const text = await file.text()
-    if (!text.trim()) return []
-    return parseJsonSessions(text)
+    if (!text.trim()) return emptySnapshot()
+    return parseSnapshot(text)
   } catch (err) {
-    if (errorName(err) === 'NotFoundError') return []
+    if (errorName(err) === 'NotFoundError') return emptySnapshot()
     throw err
   }
 }
 
-export async function writeFolderSessions(directory: DirectoryHandle, sessions: Session[]): Promise<void> {
+export async function writeFolderSnapshot(directory: DirectoryHandle, snapshot: SyncSnapshot): Promise<void> {
   const fileHandle = await directory.getFileHandle(SYNC_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
   try {
-    await writable.write(sessionsToJson(sessions))
+    await writable.write(snapshotToJson(snapshot))
     await writable.close()
   } catch (err) {
     try {

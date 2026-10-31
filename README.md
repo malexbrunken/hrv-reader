@@ -40,7 +40,24 @@ Live RMSSD and the tachogram update from the cleaned beats while the clock runs.
 
 ## History
 
-The history view charts HRV score and resting HR, plus a **7-day rolling average** of each (a session exactly seven days earlier still counts). Export JSON or CSV, including raw and filtered RR. Import merges by id and skips duplicates. Tags can be edited later. Delete removes a session from this browser and, when a folder is syncing, from `hrv-data.json`.
+The history view charts HRV score and resting HR, plus a **7-day rolling average** of each (a session exactly seven days earlier still counts). Export JSON or CSV, including raw and filtered RR. Import merges by id and skips duplicates. Tags can be edited later. Delete removes a session here and records a tombstone, so cloud sync and a connected folder drop that session on the other device too.
+
+## Cloud sync
+
+Phone and desktop share one history through `api/sessions`, a Vercel Function that stores a single JSON document in Vercel Blob. The object pathname is fixed and not a public filename (`addRandomSuffix: false`, overwrite allowed, private access). The client never talks to Blob directly.
+
+Set these environment variables on the Vercel project. Names are exact:
+
+| Name | Where | Purpose |
+| --- | --- | --- |
+| `BLOB_READ_WRITE_TOKEN` | Server only | Read-write token for the Blob store. `@vercel/blob` uses it for `get` and `put`. |
+| `HRV_PASSPHRASE` | Server only | Shared secret. The function rejects any request whose `x-hrv-passphrase` header does not match, compared with a SHA-256 digest and `timingSafeEqual`. |
+
+Create a **private** Blob store and connect it so the token is available. Do not prefix either name with `VITE_` — that would expose them in the browser bundle. Each device types the same passphrase into **Cloud sync** (saved in `localStorage` on that device) and turns the toggle on.
+
+On load, and after every save, edit, delete, or import, the app GETs the document, merges it with the local cache, and PUTs the result. The merge is the folder-sync union by session id (this browser’s copy wins when both still have the session). Deletes are tombstones: if either side has deleted an id, that session is removed and the tombstone is kept, so the delete propagates. `localStorage` remains the cache. The card shows syncing, the last synced time, and errors.
+
+`npm run dev` does not serve `/api/sessions`. The route is deployed with the site on Vercel. Locally, `vercel dev` serves it when the env vars are present.
 
 ## Sync folder
 
@@ -66,7 +83,7 @@ npm run dev
 npm run build
 ```
 
-`npm run build` typechecks and writes a static site to `dist/`. Vitest covers the Heart Rate Measurement parser (flags, 8- and 16-bit HR, energy expended, multiple RR intervals in 1/1024 s units), the HRV math (filter, time domain, Poincaré, 4 Hz interpolation, Welch LF/HF), and the folder merge (union by session id, local copy wins, raw RR kept).
+`npm run build` typechecks and writes a static site to `dist/`. Vitest covers the Heart Rate Measurement parser (flags, 8- and 16-bit HR, energy expended, multiple RR intervals in 1/1024 s units), the HRV math (filter, time domain, Poincaré, 4 Hz interpolation, Welch LF/HF), the folder and cloud merge (union by session id, local copy wins, tombstones propagate deletes, raw RR kept), and API auth (missing token, missing passphrase, wrong passphrase, PUT then GET).
 
 ## Deploy
 
