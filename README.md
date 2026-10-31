@@ -57,7 +57,7 @@ Create a **private** Blob store and connect it so the token is available. Do not
 
 On load, and after every save, edit, delete, or import, the app GETs the document, merges it with the local cache, and PUTs the result. The merge is the folder-sync union by session id (this browser’s copy wins when both still have the session). Deletes are tombstones: if either side has deleted an id, that session is removed and the tombstone is kept, so the delete propagates. `localStorage` remains the cache. The card shows syncing, the last synced time, and errors.
 
-`npm run dev` does not serve `/api/sessions`. The route is deployed with the site on Vercel. Locally, `vercel dev` serves it when the env vars are present.
+`npm run dev` does not serve `/api/sessions`. `npm run build` bundles the function to `api/sessions.mjs` (one ESM file, `@vercel/blob` left external) so Node can load it when `package.json` has `"type": "module"`. The route is deployed with the site on Vercel. Locally, `vercel dev` serves it when the env vars are present.
 
 ## Sync folder
 
