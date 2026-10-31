@@ -4,6 +4,7 @@ import { emptyTags, type Session } from '../model'
 import {
   STORAGE_KEY,
   loadSessions,
+  mergeFolderDocument,
   mergeSessions,
   parseCsv,
   readSessionText,
@@ -91,6 +92,52 @@ describe('session storage', () => {
     expect(csv).toContain('800|810|790|400|805|795')
     const fromCsv = readSessionText(csv)
     expect(fromCsv).toEqual([original])
+  })
+
+  it('unions the folder file with the local cache by session id', () => {
+    const localOnly = session({
+      id: 'local',
+      startedAt: '2026-10-03T00:00:00.000Z',
+      rawRr: [800, 810],
+      tags: { sleep: 2, soreness: null, stress: null, notes: 'browser only' },
+    })
+    const sharedLocal = session({
+      id: 'shared',
+      startedAt: '2026-10-02T00:00:00.000Z',
+      rawRr: [700, 710, 720],
+      tags: { sleep: 5, soreness: 1, stress: 2, notes: 'edited here' },
+    })
+    const sharedFile = session({
+      id: 'shared',
+      startedAt: '2026-10-02T00:00:00.000Z',
+      rawRr: [1],
+      tags: { sleep: 1, soreness: 1, stress: 1, notes: 'older file' },
+    })
+    const fileOnly = session({
+      id: 'file',
+      startedAt: '2026-10-04T00:00:00.000Z',
+      rawRr: [900, 950, 1000],
+    })
+    const duplicateInFile = session({
+      id: 'file',
+      startedAt: '2026-10-04T00:00:00.000Z',
+      rawRr: [111],
+    })
+
+    const merged = mergeFolderDocument(
+      [localOnly, sharedLocal],
+      sessionsToJson([sharedFile, fileOnly, duplicateInFile]),
+    )
+
+    expect(merged.map((item) => item.id)).toEqual(['file', 'local', 'shared'])
+    expect(merged.find((item) => item.id === 'shared')).toMatchObject({
+      rawRr: [700, 710, 720],
+      tags: { notes: 'edited here', sleep: 5 },
+    })
+    expect(merged.find((item) => item.id === 'file')?.rawRr).toEqual([111])
+    expect(merged.find((item) => item.id === 'local')?.rawRr).toEqual([800, 810])
+    expect(mergeFolderDocument([localOnly], '   ')).toEqual([localOnly])
+    expect(() => mergeFolderDocument([], '{')).toThrow(/JSON/)
   })
 
   it('merges imports by id and skips duplicates', () => {

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { FolderSyncCard } from './components/FolderSyncCard'
 import { HistoryView } from './components/HistoryView'
 import { MeasureView } from './components/MeasureView'
 import type { Session } from './model'
 import { loadSessions, mergeSessions, saveSessions, sortSessions } from './storage/sessions'
+import { useFolderSync } from './useFolderSync'
 
 type View = 'measure' | 'history'
 
@@ -18,10 +20,14 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
+  const sync = useFolderSync(sessionsRef, setSessions)
+
   function persist(next: Session[]) {
     const sorted = sortSessions(next)
+    sessionsRef.current = sorted
     saveSessions(sorted)
     setSessions(sorted)
+    sync.writeThrough()
   }
 
   function saveOne(session: Session) {
@@ -53,6 +59,12 @@ export default function App() {
         </div>
       </header>
       <main id="content" className="wrap">
+        <FolderSyncCard
+          status={sync.status}
+          onChoose={() => void sync.chooseFolder()}
+          onReconnect={() => void sync.reconnect()}
+          onStop={() => void sync.stopSyncing()}
+        />
         <div hidden={view !== 'measure'}>
           <MeasureView onSave={saveOne} />
         </div>
@@ -60,7 +72,7 @@ export default function App() {
           <HistoryView sessions={sessions} onChange={persist} />
         </div>
         <footer>
-          <p>Sessions stay in this browser. Nothing is uploaded.</p>
+          <p>Sessions stay on this device. A sync folder is a file you choose, not an upload.</p>
         </footer>
       </main>
     </>

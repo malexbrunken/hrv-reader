@@ -55,7 +55,12 @@ export function HistoryView({
 
   function remove(session: Session) {
     const when = formatWhen(session.startedAt)
-    if (!window.confirm(`Delete the session from ${when}? This only removes it from this browser.`)) return
+    if (
+      !window.confirm(
+        `Delete the session from ${when}? It is removed from this browser, and from hrv-data.json when a folder is syncing.`,
+      )
+    )
+      return
     onChange(sessions.filter((item) => item.id !== session.id))
   }
 

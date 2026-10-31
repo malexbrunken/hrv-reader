@@ -2,7 +2,7 @@
 
 Resting heart-rate variability from a Garmin HRM 600 chest strap, in the browser. The page talks to the strap with Web Bluetooth, times a short seated session, and keeps every session on the device. A demo mode generates synthetic beats so the whole flow works without hardware.
 
-Nothing is uploaded. Sessions live in `localStorage`.
+Nothing is uploaded to a server. Sessions are cached in `localStorage`. Chrome and Edge can also keep `hrv-data.json` in a folder you choose, such as Dropbox, OneDrive, or iCloud.
 
 ## Use it
 
@@ -40,7 +40,22 @@ Live RMSSD and the tachogram update from the cleaned beats while the clock runs.
 
 ## History
 
-The history view charts HRV score and resting HR, plus a **7-day rolling average** of each (a session exactly seven days earlier still counts). Export JSON or CSV, including raw and filtered RR. Import merges by id and skips duplicates. Tags can be edited later. Delete removes a session from this browser only.
+The history view charts HRV score and resting HR, plus a **7-day rolling average** of each (a session exactly seven days earlier still counts). Export JSON or CSV, including raw and filtered RR. Import merges by id and skips duplicates. Tags can be edited later. Delete removes a session from this browser and, when a folder is syncing, from `hrv-data.json`.
+
+## Sync folder
+
+**Sync folder** uses the File System Access API (`showDirectoryPicker`) in Chrome or Edge. Pick a directory that your cloud drive already syncs. The app reads and writes `hrv-data.json` in that directory. The file is the same JSON export: every session, including raw RR.
+
+The directory handle is stored in IndexedDB. After a restart the browser usually forgets write permission until you click **Reconnect folder**. Permission is requested only from that click. If the API is missing, the control explains that and the app keeps using `localStorage`.
+
+On connect and on load (once permission is already granted), the file and the `localStorage` cache are merged by session id:
+
+- Every id from either side is kept once.
+- When both sides have the same id, this browser’s copy wins, so an edit that has not been written yet is not replaced by an older file.
+- Sessions that exist only in the file are added, which is how a cleared browser gets its history back.
+- The combined list is written back to the folder and saved to `localStorage`.
+
+Saving a session, editing tags or notes, deleting, and importing all write the file again. The card shows the folder name, the last synced time, and the error if a read or write fails.
 
 ## Develop
 
@@ -51,7 +66,7 @@ npm run dev
 npm run build
 ```
 
-`npm run build` typechecks and writes a static site to `dist/`. Vitest covers the Heart Rate Measurement parser (flags, 8- and 16-bit HR, energy expended, multiple RR intervals in 1/1024 s units) and the HRV math (filter, time domain, Poincaré, 4 Hz interpolation, Welch LF/HF).
+`npm run build` typechecks and writes a static site to `dist/`. Vitest covers the Heart Rate Measurement parser (flags, 8- and 16-bit HR, energy expended, multiple RR intervals in 1/1024 s units), the HRV math (filter, time domain, Poincaré, 4 Hz interpolation, Welch LF/HF), and the folder merge (union by session id, local copy wins, raw RR kept).
 
 ## Deploy
 

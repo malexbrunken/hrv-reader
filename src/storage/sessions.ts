@@ -170,6 +170,25 @@ export function saveSessions(sessions: Session[], storage?: StorageLike): void {
   }
 }
 
+/**
+ * Union of the browser cache and the folder file, one session per id.
+ * When both sides have the same id, the local session is kept, including its
+ * raw RR and tags. Sessions that exist only in the file are added.
+ */
+export function unionSessionsById(local: Session[], file: Session[]): Session[] {
+  const byId = new Map<string, Session>()
+  for (const session of file) byId.set(session.id, session)
+  for (const session of local) byId.set(session.id, session)
+  return sortSessions([...byId.values()])
+}
+
+/** Parse a folder document and union it with the local cache. An empty file is an empty list. */
+export function mergeFolderDocument(local: Session[], fileText: string): Session[] {
+  const trimmed = fileText.replace(/^\uFEFF/, '').trim()
+  const fromFile = trimmed ? parseJsonSessions(trimmed) : []
+  return unionSessionsById(local, fromFile)
+}
+
 export function mergeSessions(existing: Session[], incoming: Session[]): MergeResult {
   const ids = new Set(existing.map((session) => session.id))
   const added: Session[] = []
